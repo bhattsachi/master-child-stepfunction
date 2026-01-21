@@ -64,4 +64,14 @@ repo-root/
  child step functions should finish successfully if there is no error
  Parallel completes
  
- 
+ # Deploy with default job counts
+sam deploy
+
+# Customize jobs per child
+sam deploy --parameter-overrides \
+  Child1GlueJobs="etl-job-1,etl-job-2" \
+  Child2GlueJobs="transform-a,transform-b,transform-c,transform-d,transform-e" \
+  Child3GlueJobs="load-job-1" \
+  Child4GlueJobs="process-x,process-y,process-z" \
+  Child5GlueJobs="final-job"
+  
