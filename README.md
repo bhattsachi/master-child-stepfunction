@@ -58,7 +58,7 @@ repo-root/
  1 Master step function
  Master step function will execute 5 child step functions in parallel
  All 5 child step functions start together
- each child step function will invoke few glue jobs
+ each child step function will invoke 4-5 glue jobs (dont create gluejob , just put a placeholder for now)
  child step function triggers cloudwatch alarm incase of any failure
  Master step function catches failure
  child step functions should finish successfully if there is no error
