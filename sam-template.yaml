@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Master-Child Step Functions pipeline to execute Glue jobs in parallel threads
+  Master Step Function executing 5 child Step Functions in parallel.
+  Each child runs 30 Glue jobs sequentially.
+  Child failure does NOT fail master. SNS notification sent for failures.
 
 Globals:
   Function:
@@ -9,37 +11,21 @@ Globals:
 
 Resources:
 
-  #####################################
-  # IAM Role – Master Step Function
-  #####################################
-  MasterStepFunctionRole:
-    Type: AWS::IAM::Role
+  ############################
+  # SNS Topic for Failures
+  ############################
+  StepFunctionFailureTopic:
+    Type: AWS::SNS::Topic
     Properties:
-      RoleName: master-stepfn-role
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: states.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: StartChildStepFunctions
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - states:StartExecution
-                Resource: "*"
+      TopicName: stepfunction-child-failure
 
-  #####################################
-  # IAM Role – Child Step Function
-  #####################################
-  ChildStepFunctionRole:
+  ############################
+  # IAM Role for Step Functions
+  ############################
+  StepFunctionsRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: child-stepfn-role
+      RoleName: stepfunctions-glue-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -48,7 +34,7 @@ Resources:
               Service: states.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: GlueExecutionPolicy
+        - PolicyName: StepFunctionsGluePolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -58,22 +44,31 @@ Resources:
                   - glue:GetJobRun
                   - glue:GetJobRuns
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                  - states:DescribeExecution
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref StepFunctionFailureTopic
 
-  #####################################
-  # Child Step Function
-  #####################################
-  ChildGlueRunnerStateMachine:
+  ##################################################
+  # CHILD STEP FUNCTION (Reusable for all threads)
+  ##################################################
+  ChildGlueStepFunction:
     Type: AWS::Serverless::StateMachine
     Properties:
-      Name: ChildGlueRunner
-      Role: !GetAtt ChildStepFunctionRole.Arn
+      Name: child-glue-runner
+      Role: !GetAtt StepFunctionsRole.Arn
       Definition:
         StartAt: RunGlueJobs
         States:
           RunGlueJobs:
             Type: Map
-            ItemsPath: $.glueJobs
-            MaxConcurrency: 1   # change if Glue jobs can run in parallel
+            ItemsPath: $.GlueJobs
+            MaxConcurrency: 1
             Iterator:
               StartAt: StartGlueJob
               States:
@@ -82,81 +77,181 @@ Resources:
                   Resource: arn:aws:states:::glue:startJobRun.sync
                   Parameters:
                     JobName.$: "$"
-                    Arguments:
-                      "--threadId.$": "$$.Map.Item.Value"
+                  Catch:
+                    - ErrorEquals: ["States.ALL"]
+                      ResultPath: $.error
+                      Next: FailChild
                   End: true
-            End: true
 
-  #####################################
-  # Master Step Function
-  #####################################
-  MasterPipelineStateMachine:
+          FailChild:
+            Type: Fail
+            Cause: GlueJobFailed
+            Error: GlueJobExecutionFailed
+
+  ##################################################
+  # MASTER STEP FUNCTION
+  ##################################################
+  MasterStepFunction:
     Type: AWS::Serverless::StateMachine
     Properties:
-      Name: MasterGluePipeline
-      Role: !GetAtt MasterStepFunctionRole.Arn
+      Name: master-glue-orchestrator
+      Role: !GetAtt StepFunctionsRole.Arn
       Definition:
-        StartAt: RunThreadsInParallel
+        StartAt: ParallelChildren
         States:
-          RunThreadsInParallel:
+          ParallelChildren:
             Type: Parallel
             Branches:
-              - StartAt: Thread1
+
+              # -------- Child 1 --------
+              - StartAt: Child1
                 States:
-                  Thread1:
+                  Child1:
                     Type: Task
                     Resource: arn:aws:states:::states:startExecution.sync
                     Parameters:
-                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
-                      Input.$: "$.threads[0]"
+                      StateMachineArn: !Ref ChildGlueStepFunction
+                      Input:
+                        GlueJobs:
+                          - glue-job-1
+                          - glue-job-2
+                          - glue-job-3
+                          # ... up to 30
+                    Catch:
+                      - ErrorEquals: ["States.ALL"]
+                        ResultPath: $.error
+                        Next: NotifyFailure1
                     End: true
 
-              - StartAt: Thread2
-                States:
-                  Thread2:
+                  NotifyFailure1:
                     Type: Task
-                    Resource: arn:aws:states:::states:startExecution.sync
+                    Resource: arn:aws:states:::sns:publish
                     Parameters:
-                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
-                      Input.$: "$.threads[1]"
+                      TopicArn: !Ref StepFunctionFailureTopic
+                      Message:
+                        Child: Child1
+                        Status: FAILED
+                        Error.$: $.error
                     End: true
 
-              - StartAt: Thread3
+              # -------- Child 2 --------
+              - StartAt: Child2
                 States:
-                  Thread3:
+                  Child2:
                     Type: Task
                     Resource: arn:aws:states:::states:startExecution.sync
                     Parameters:
-                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
-                      Input.$: "$.threads[2]"
+                      StateMachineArn: !Ref ChildGlueStepFunction
+                      Input:
+                        GlueJobs:
+                          - glue-job-a
+                          - glue-job-b
+                    Catch:
+                      - ErrorEquals: ["States.ALL"]
+                        ResultPath: $.error
+                        Next: NotifyFailure2
                     End: true
 
-              - StartAt: Thread4
-                States:
-                  Thread4:
+                  NotifyFailure2:
                     Type: Task
-                    Resource: arn:aws:states:::states:startExecution.sync
+                    Resource: arn:aws:states:::sns:publish
                     Parameters:
-                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
-                      Input.$: "$.threads[3]"
+                      TopicArn: !Ref StepFunctionFailureTopic
+                      Message:
+                        Child: Child2
+                        Status: FAILED
+                        Error.$: $.error
                     End: true
 
-              - StartAt: Thread5
+              # -------- Child 3 --------
+              - StartAt: Child3
                 States:
-                  Thread5:
+                  Child3:
                     Type: Task
                     Resource: arn:aws:states:::states:startExecution.sync
                     Parameters:
-                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
-                      Input.$: "$.threads[4]"
+                      StateMachineArn: !Ref ChildGlueStepFunction
+                      Input:
+                        GlueJobs: []
+                    Catch:
+                      - ErrorEquals: ["States.ALL"]
+                        ResultPath: $.error
+                        Next: NotifyFailure3
                     End: true
+
+                  NotifyFailure3:
+                    Type: Task
+                    Resource: arn:aws:states:::sns:publish
+                    Parameters:
+                      TopicArn: !Ref StepFunctionFailureTopic
+                      Message:
+                        Child: Child3
+                        Status: FAILED
+                        Error.$: $.error
+                    End: true
+
+              # -------- Child 4 --------
+              - StartAt: Child4
+                States:
+                  Child4:
+                    Type: Task
+                    Resource: arn:aws:states:::states:startExecution.sync
+                    Parameters:
+                      StateMachineArn: !Ref ChildGlueStepFunction
+                      Input:
+                        GlueJobs: []
+                    Catch:
+                      - ErrorEquals: ["States.ALL"]
+                        ResultPath: $.error
+                        Next: NotifyFailure4
+                    End: true
+
+                  NotifyFailure4:
+                    Type: Task
+                    Resource: arn:aws:states:::sns:publish
+                    Parameters:
+                      TopicArn: !Ref StepFunctionFailureTopic
+                      Message:
+                        Child: Child4
+                        Status: FAILED
+                        Error.$: $.error
+                    End: true
+
+              # -------- Child 5 --------
+              - StartAt: Child5
+                States:
+                  Child5:
+                    Type: Task
+                    Resource: arn:aws:states:::states:startExecution.sync
+                    Parameters:
+                      StateMachineArn: !Ref ChildGlueStepFunction
+                      Input:
+                        GlueJobs: []
+                    Catch:
+                      - ErrorEquals: ["States.ALL"]
+                        ResultPath: $.error
+                        Next: NotifyFailure5
+                    End: true
+
+                  NotifyFailure5:
+                    Type: Task
+                    Resource: arn:aws:states:::sns:publish
+                    Parameters:
+                      TopicArn: !Ref StepFunctionFailureTopic
+                      Message:
+                        Child: Child5
+                        Status: FAILED
+                        Error.$: $.error
+                    End: true
+
             End: true
 
 Outputs:
-  MasterStateMachineArn:
-    Description: Master Step Function ARN
-    Value: !Ref MasterPipelineStateMachine
+  MasterStepFunctionArn:
+    Value: !Ref MasterStepFunction
 
-  ChildStateMachineArn:
-    Description: Child Step Function ARN
-    Value: !Ref ChildGlueRunnerStateMachine
+  ChildStepFunctionArn:
+    Value: !Ref ChildGlueStepFunction
+
+  FailureTopicArn:
+    Value: !Ref StepFunctionFailureTopic
