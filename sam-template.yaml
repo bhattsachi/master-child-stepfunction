@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Master-Child Step Functions pipeline to execute Glue jobs in parallel threads
+
+Globals:
+  Function:
+    Timeout: 900
+
+Resources:
+
+  #####################################
+  # IAM Role – Master Step Function
+  #####################################
+  MasterStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: master-stepfn-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartChildStepFunctions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: "*"
+
+  #####################################
+  # IAM Role – Child Step Function
+  #####################################
+  ChildStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: child-stepfn-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GlueExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                Resource: "*"
+
+  #####################################
+  # Child Step Function
+  #####################################
+  ChildGlueRunnerStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: ChildGlueRunner
+      Role: !GetAtt ChildStepFunctionRole.Arn
+      Definition:
+        StartAt: RunGlueJobs
+        States:
+          RunGlueJobs:
+            Type: Map
+            ItemsPath: $.glueJobs
+            MaxConcurrency: 1   # change if Glue jobs can run in parallel
+            Iterator:
+              StartAt: StartGlueJob
+              States:
+                StartGlueJob:
+                  Type: Task
+                  Resource: arn:aws:states:::glue:startJobRun.sync
+                  Parameters:
+                    JobName.$: "$"
+                    Arguments:
+                      "--threadId.$": "$$.Map.Item.Value"
+                  End: true
+            End: true
+
+  #####################################
+  # Master Step Function
+  #####################################
+  MasterPipelineStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: MasterGluePipeline
+      Role: !GetAtt MasterStepFunctionRole.Arn
+      Definition:
+        StartAt: RunThreadsInParallel
+        States:
+          RunThreadsInParallel:
+            Type: Parallel
+            Branches:
+              - StartAt: Thread1
+                States:
+                  Thread1:
+                    Type: Task
+                    Resource: arn:aws:states:::states:startExecution.sync
+                    Parameters:
+                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
+                      Input.$: "$.threads[0]"
+                    End: true
+
+              - StartAt: Thread2
+                States:
+                  Thread2:
+                    Type: Task
+                    Resource: arn:aws:states:::states:startExecution.sync
+                    Parameters:
+                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
+                      Input.$: "$.threads[1]"
+                    End: true
+
+              - StartAt: Thread3
+                States:
+                  Thread3:
+                    Type: Task
+                    Resource: arn:aws:states:::states:startExecution.sync
+                    Parameters:
+                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
+                      Input.$: "$.threads[2]"
+                    End: true
+
+              - StartAt: Thread4
+                States:
+                  Thread4:
+                    Type: Task
+                    Resource: arn:aws:states:::states:startExecution.sync
+                    Parameters:
+                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
+                      Input.$: "$.threads[3]"
+                    End: true
+
+              - StartAt: Thread5
+                States:
+                  Thread5:
+                    Type: Task
+                    Resource: arn:aws:states:::states:startExecution.sync
+                    Parameters:
+                      StateMachineArn: !Ref ChildGlueRunnerStateMachine
+                      Input.$: "$.threads[4]"
+                    End: true
+            End: true
+
+Outputs:
+  MasterStateMachineArn:
+    Description: Master Step Function ARN
+    Value: !Ref MasterPipelineStateMachine
+
+  ChildStateMachineArn:
+    Description: Child Step Function ARN
+    Value: !Ref ChildGlueRunnerStateMachine
