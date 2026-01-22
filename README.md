@@ -290,6 +290,34 @@ aws cloudformation deploy \
   --template-file packaged-template.yaml \
   --stack-name master-step-function-multiple-gluejobs-stack \
   --capabilities CAPABILITY_NAMED_IAM
+```
+# ============================
+SFN_ARN=$(aws cloudformation describe-stacks \
+  --stack-name glue-executor-stack \
+  --query 'Stacks[0].Outputs[?OutputKey==`StateMachineArn`].OutputValue' \
+  --output text)
 
+# Execute A → job1, job2, job3
+aws stepfunctions start-execution \
+  --state-machine-arn $SFN_ARN \
+  --name "execution-a-$(date +%s)" \
+  --input '{"glueJobs":"job1,job2,job3"}' &
 
+# Execute B → job4, job5, job6
+aws stepfunctions start-execution \
+  --state-machine-arn $SFN_ARN \
+  --name "execution-b-$(date +%s)" \
+  --input '{"glueJobs":"job4,job5,job6"}' &
+
+# Execute C → job7, job8
+aws stepfunctions start-execution \
+  --state-machine-arn $SFN_ARN \
+  --name "execution-c-$(date +%s)" \
+  --input '{"glueJobs":"job7,job8"}' &
+
+# Wait for all background jobs
+wait
+Summary
+ComponentCountStep Function1IAM Role1CloudWatch Alarm1Total Resources3
+Each execution runs independently and processes only the Glue jobs passed to it.TemplateYAML DownloadClaude is AI and can make mistakes. Please double-check responses.
  
