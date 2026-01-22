@@ -91,11 +91,16 @@ This transforms SAM-specific resources and uploads artifacts to S3.
 
 ```bash
 aws cloudformation package \
-  --template-file template.yaml \
-  --s3-bucket <YOUR_S3_BUCKET_NAME> \
+  --template-file sam-template.yaml \
+  --s3-bucket hoth-data-application-artifacts-615299756109-us-east-2 \
   --s3-prefix sam-artifacts \
   --output-template-file packaged-template.yaml
 ```
+# quick deploy 
+aws cloudformation deploy \
+  --template-file packaged-template.yaml \
+  --stack-name master-step-function-stack \
+  --capabilities CAPABILITY_NAMED_IAM
 
 ### Step 2: Deploy the packaged template
 
@@ -162,7 +167,7 @@ aws cloudformation update-stack \
 aws cloudformation create-change-set \
   --stack-name master-step-function-stack \
   --change-set-name my-change-set \
-  --template-body file://template.yaml \
+  --template-body sam-template.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --change-set-type CREATE \
   --parameters \

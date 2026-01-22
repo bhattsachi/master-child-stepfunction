@@ -1,0 +1,645 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: "Master Step Function orchestrating 5 child Step Functions in parallel.\
+  \ Each child executes configurable Glue jobs and triggers CloudWatch alarms on failure.\n"
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+    - dev
+    - staging
+    - prod
+    Description: Environment name
+  AlarmSNSTopicArn:
+    Type: String
+    Description: SNS Topic ARN for CloudWatch Alarm notifications
+    Default: ''
+  Child1GlueJobs:
+    Type: CommaDelimitedList
+    Default: glue-job-1-a,glue-job-1-b,glue-job-1-c
+    Description: Comma-separated list of Glue job names for Child Step Function 1
+  Child2GlueJobs:
+    Type: CommaDelimitedList
+    Default: glue-job-2-a,glue-job-2-b,glue-job-2-c,glue-job-2-d
+    Description: Comma-separated list of Glue job names for Child Step Function 2
+  Child3GlueJobs:
+    Type: CommaDelimitedList
+    Default: glue-job-3-a,glue-job-3-b,glue-job-3-c,glue-job-3-d,glue-job-3-e
+    Description: Comma-separated list of Glue job names for Child Step Function 3
+  Child4GlueJobs:
+    Type: CommaDelimitedList
+    Default: glue-job-4-a,glue-job-4-b
+    Description: Comma-separated list of Glue job names for Child Step Function 4
+  Child5GlueJobs:
+    Type: CommaDelimitedList
+    Default: glue-job-5-a,glue-job-5-b,glue-job-5-c,glue-job-5-d,glue-job-5-e,glue-job-5-f
+    Description: Comma-separated list of Glue job names for Child Step Function 5
+Resources:
+  MasterStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-master-sfn-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: states.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: InvokeChildStepFunctions
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - states:StartExecution
+            - states:DescribeExecution
+            - states:StopExecution
+            Resource:
+            - Ref: ChildStepFunction1
+            - Ref: ChildStepFunction2
+            - Ref: ChildStepFunction3
+            - Ref: ChildStepFunction4
+            - Ref: ChildStepFunction5
+          - Effect: Allow
+            Action:
+            - events:PutTargets
+            - events:PutRule
+            - events:DescribeRule
+            Resource:
+            - Fn::Sub: arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
+  ChildStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-child-sfn-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: states.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: GlueJobExecution
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - glue:StartJobRun
+            - glue:GetJobRun
+            - glue:GetJobRuns
+            - glue:BatchStopJobRun
+            Resource: '*'
+      - PolicyName: CloudWatchAlarmActions
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - cloudwatch:SetAlarmState
+            Resource:
+            - Fn::GetAtt:
+              - ChildStepFunction1FailureAlarm
+              - Arn
+            - Fn::GetAtt:
+              - ChildStepFunction2FailureAlarm
+              - Arn
+            - Fn::GetAtt:
+              - ChildStepFunction3FailureAlarm
+              - Arn
+            - Fn::GetAtt:
+              - ChildStepFunction4FailureAlarm
+              - Arn
+            - Fn::GetAtt:
+              - ChildStepFunction5FailureAlarm
+              - Arn
+  ChildStepFunction1FailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName:
+        Fn::Sub: ${AWS::StackName}-child-sfn-1-failure
+      AlarmDescription: Alarm triggered when Child Step Function 1 fails
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: ChildStepFunction1
+      AlarmActions:
+      - Fn::If:
+        - HasSNSTopic
+        - Ref: AlarmSNSTopicArn
+        - Ref: AWS::NoValue
+      TreatMissingData: notBreaching
+  ChildStepFunction2FailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName:
+        Fn::Sub: ${AWS::StackName}-child-sfn-2-failure
+      AlarmDescription: Alarm triggered when Child Step Function 2 fails
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: ChildStepFunction2
+      AlarmActions:
+      - Fn::If:
+        - HasSNSTopic
+        - Ref: AlarmSNSTopicArn
+        - Ref: AWS::NoValue
+      TreatMissingData: notBreaching
+  ChildStepFunction3FailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName:
+        Fn::Sub: ${AWS::StackName}-child-sfn-3-failure
+      AlarmDescription: Alarm triggered when Child Step Function 3 fails
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: ChildStepFunction3
+      AlarmActions:
+      - Fn::If:
+        - HasSNSTopic
+        - Ref: AlarmSNSTopicArn
+        - Ref: AWS::NoValue
+      TreatMissingData: notBreaching
+  ChildStepFunction4FailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName:
+        Fn::Sub: ${AWS::StackName}-child-sfn-4-failure
+      AlarmDescription: Alarm triggered when Child Step Function 4 fails
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: ChildStepFunction4
+      AlarmActions:
+      - Fn::If:
+        - HasSNSTopic
+        - Ref: AlarmSNSTopicArn
+        - Ref: AWS::NoValue
+      TreatMissingData: notBreaching
+  ChildStepFunction5FailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName:
+        Fn::Sub: ${AWS::StackName}-child-sfn-5-failure
+      AlarmDescription: Alarm triggered when Child Step Function 5 fails
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: ChildStepFunction5
+      AlarmActions:
+      - Fn::If:
+        - HasSNSTopic
+        - Ref: AlarmSNSTopicArn
+        - Ref: AWS::NoValue
+      TreatMissingData: notBreaching
+  ChildStepFunction1:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-child-sfn-1
+      Role:
+        Fn::GetAtt:
+        - ChildStepFunctionRole
+        - Arn
+      Type: STANDARD
+      Definition:
+        Comment:
+          Fn::Sub: Child Step Function 1 - Executes ${Child1GlueJobs} Glue Jobs sequentially
+        StartAt: PrepareGlueJobList
+        States:
+          PrepareGlueJobList:
+            Type: Pass
+            Result:
+              jobs:
+                Ref: Child1GlueJobs
+            Next: ExecuteGlueJobsSequentially
+          ExecuteGlueJobsSequentially:
+            Type: Map
+            ItemsPath: $.jobs
+            MaxConcurrency: 1
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: RunGlueJob
+              States:
+                RunGlueJob:
+                  Type: Task
+                  Resource: arn:aws:states:::glue:startJobRun.sync
+                  Parameters:
+                    JobName.$: $
+                  End: true
+            Catch:
+            - ErrorEquals:
+              - States.ALL
+              ResultPath: $.error
+              Next: TriggerFailureAlarm
+            Next: SuccessState
+          TriggerFailureAlarm:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:cloudwatch:setAlarmState
+            Parameters:
+              AlarmName:
+                Fn::Sub: ${AWS::StackName}-child-sfn-1-failure
+              StateValue: ALARM
+              StateReason: Child Step Function 1 failed during Glue job execution
+            Next: FailState
+          FailState:
+            Type: Fail
+            Error: GlueJobFailed
+            Cause: One or more Glue jobs in Child Step Function 1 failed
+          SuccessState:
+            Type: Succeed
+  ChildStepFunction2:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-child-sfn-2
+      Role:
+        Fn::GetAtt:
+        - ChildStepFunctionRole
+        - Arn
+      Type: STANDARD
+      Definition:
+        Comment:
+          Fn::Sub: Child Step Function 2 - Executes ${Child2GlueJobs} Glue Jobs sequentially
+        StartAt: PrepareGlueJobList
+        States:
+          PrepareGlueJobList:
+            Type: Pass
+            Result:
+              jobs:
+                Ref: Child2GlueJobs
+            Next: ExecuteGlueJobsSequentially
+          ExecuteGlueJobsSequentially:
+            Type: Map
+            ItemsPath: $.jobs
+            MaxConcurrency: 1
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: RunGlueJob
+              States:
+                RunGlueJob:
+                  Type: Task
+                  Resource: arn:aws:states:::glue:startJobRun.sync
+                  Parameters:
+                    JobName.$: $
+                  End: true
+            Catch:
+            - ErrorEquals:
+              - States.ALL
+              ResultPath: $.error
+              Next: TriggerFailureAlarm
+            Next: SuccessState
+          TriggerFailureAlarm:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:cloudwatch:setAlarmState
+            Parameters:
+              AlarmName:
+                Fn::Sub: ${AWS::StackName}-child-sfn-2-failure
+              StateValue: ALARM
+              StateReason: Child Step Function 2 failed during Glue job execution
+            Next: FailState
+          FailState:
+            Type: Fail
+            Error: GlueJobFailed
+            Cause: One or more Glue jobs in Child Step Function 2 failed
+          SuccessState:
+            Type: Succeed
+  ChildStepFunction3:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-child-sfn-3
+      Role:
+        Fn::GetAtt:
+        - ChildStepFunctionRole
+        - Arn
+      Type: STANDARD
+      Definition:
+        Comment:
+          Fn::Sub: Child Step Function 3 - Executes ${Child3GlueJobs} Glue Jobs sequentially
+        StartAt: PrepareGlueJobList
+        States:
+          PrepareGlueJobList:
+            Type: Pass
+            Result:
+              jobs:
+                Ref: Child3GlueJobs
+            Next: ExecuteGlueJobsSequentially
+          ExecuteGlueJobsSequentially:
+            Type: Map
+            ItemsPath: $.jobs
+            MaxConcurrency: 1
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: RunGlueJob
+              States:
+                RunGlueJob:
+                  Type: Task
+                  Resource: arn:aws:states:::glue:startJobRun.sync
+                  Parameters:
+                    JobName.$: $
+                  End: true
+            Catch:
+            - ErrorEquals:
+              - States.ALL
+              ResultPath: $.error
+              Next: TriggerFailureAlarm
+            Next: SuccessState
+          TriggerFailureAlarm:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:cloudwatch:setAlarmState
+            Parameters:
+              AlarmName:
+                Fn::Sub: ${AWS::StackName}-child-sfn-3-failure
+              StateValue: ALARM
+              StateReason: Child Step Function 3 failed during Glue job execution
+            Next: FailState
+          FailState:
+            Type: Fail
+            Error: GlueJobFailed
+            Cause: One or more Glue jobs in Child Step Function 3 failed
+          SuccessState:
+            Type: Succeed
+  ChildStepFunction4:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-child-sfn-4
+      Role:
+        Fn::GetAtt:
+        - ChildStepFunctionRole
+        - Arn
+      Type: STANDARD
+      Definition:
+        Comment:
+          Fn::Sub: Child Step Function 4 - Executes ${Child4GlueJobs} Glue Jobs sequentially
+        StartAt: PrepareGlueJobList
+        States:
+          PrepareGlueJobList:
+            Type: Pass
+            Result:
+              jobs:
+                Ref: Child4GlueJobs
+            Next: ExecuteGlueJobsSequentially
+          ExecuteGlueJobsSequentially:
+            Type: Map
+            ItemsPath: $.jobs
+            MaxConcurrency: 1
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: RunGlueJob
+              States:
+                RunGlueJob:
+                  Type: Task
+                  Resource: arn:aws:states:::glue:startJobRun.sync
+                  Parameters:
+                    JobName.$: $
+                  End: true
+            Catch:
+            - ErrorEquals:
+              - States.ALL
+              ResultPath: $.error
+              Next: TriggerFailureAlarm
+            Next: SuccessState
+          TriggerFailureAlarm:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:cloudwatch:setAlarmState
+            Parameters:
+              AlarmName:
+                Fn::Sub: ${AWS::StackName}-child-sfn-4-failure
+              StateValue: ALARM
+              StateReason: Child Step Function 4 failed during Glue job execution
+            Next: FailState
+          FailState:
+            Type: Fail
+            Error: GlueJobFailed
+            Cause: One or more Glue jobs in Child Step Function 4 failed
+          SuccessState:
+            Type: Succeed
+  ChildStepFunction5:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-child-sfn-5
+      Role:
+        Fn::GetAtt:
+        - ChildStepFunctionRole
+        - Arn
+      Type: STANDARD
+      Definition:
+        Comment:
+          Fn::Sub: Child Step Function 5 - Executes ${Child5GlueJobs} Glue Jobs sequentially
+        StartAt: PrepareGlueJobList
+        States:
+          PrepareGlueJobList:
+            Type: Pass
+            Result:
+              jobs:
+                Ref: Child5GlueJobs
+            Next: ExecuteGlueJobsSequentially
+          ExecuteGlueJobsSequentially:
+            Type: Map
+            ItemsPath: $.jobs
+            MaxConcurrency: 1
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: RunGlueJob
+              States:
+                RunGlueJob:
+                  Type: Task
+                  Resource: arn:aws:states:::glue:startJobRun.sync
+                  Parameters:
+                    JobName.$: $
+                  End: true
+            Catch:
+            - ErrorEquals:
+              - States.ALL
+              ResultPath: $.error
+              Next: TriggerFailureAlarm
+            Next: SuccessState
+          TriggerFailureAlarm:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:cloudwatch:setAlarmState
+            Parameters:
+              AlarmName:
+                Fn::Sub: ${AWS::StackName}-child-sfn-5-failure
+              StateValue: ALARM
+              StateReason: Child Step Function 5 failed during Glue job execution
+            Next: FailState
+          FailState:
+            Type: Fail
+            Error: GlueJobFailed
+            Cause: One or more Glue jobs in Child Step Function 5 failed
+          SuccessState:
+            Type: Succeed
+  MasterStepFunction:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-master-sfn
+      Role:
+        Fn::GetAtt:
+        - MasterStepFunctionRole
+        - Arn
+      Type: STANDARD
+      Definition:
+        Comment: Master Step Function - Orchestrates 5 child step functions in parallel
+        StartAt: ExecuteChildStepFunctionsInParallel
+        States:
+          ExecuteChildStepFunctionsInParallel:
+            Type: Parallel
+            Branches:
+            - StartAt: InvokeChildStepFunction1
+              States:
+                InvokeChildStepFunction1:
+                  Type: Task
+                  Resource: arn:aws:states:::states:startExecution.sync:2
+                  Parameters:
+                    StateMachineArn:
+                      Ref: ChildStepFunction1
+                    Input.$: $
+                  End: true
+            - StartAt: InvokeChildStepFunction2
+              States:
+                InvokeChildStepFunction2:
+                  Type: Task
+                  Resource: arn:aws:states:::states:startExecution.sync:2
+                  Parameters:
+                    StateMachineArn:
+                      Ref: ChildStepFunction2
+                    Input.$: $
+                  End: true
+            - StartAt: InvokeChildStepFunction3
+              States:
+                InvokeChildStepFunction3:
+                  Type: Task
+                  Resource: arn:aws:states:::states:startExecution.sync:2
+                  Parameters:
+                    StateMachineArn:
+                      Ref: ChildStepFunction3
+                    Input.$: $
+                  End: true
+            - StartAt: InvokeChildStepFunction4
+              States:
+                InvokeChildStepFunction4:
+                  Type: Task
+                  Resource: arn:aws:states:::states:startExecution.sync:2
+                  Parameters:
+                    StateMachineArn:
+                      Ref: ChildStepFunction4
+                    Input.$: $
+                  End: true
+            - StartAt: InvokeChildStepFunction5
+              States:
+                InvokeChildStepFunction5:
+                  Type: Task
+                  Resource: arn:aws:states:::states:startExecution.sync:2
+                  Parameters:
+                    StateMachineArn:
+                      Ref: ChildStepFunction5
+                    Input.$: $
+                  End: true
+            Catch:
+            - ErrorEquals:
+              - States.ALL
+              ResultPath: $.error
+              Next: HandleParallelFailure
+            Next: AllChildStepFunctionsSucceeded
+          HandleParallelFailure:
+            Type: Pass
+            Result:
+              status: FAILED
+              message: One or more child step functions failed
+            ResultPath: $.failureInfo
+            Next: MasterFailState
+          MasterFailState:
+            Type: Fail
+            Error: ChildStepFunctionFailed
+            Cause: One or more child step functions failed during parallel execution
+          AllChildStepFunctionsSucceeded:
+            Type: Succeed
+Conditions:
+  HasSNSTopic:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: AlarmSNSTopicArn
+      - ''
+Outputs:
+  MasterStepFunctionArn:
+    Description: ARN of the Master Step Function
+    Value:
+      Ref: MasterStepFunction
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-MasterStepFunctionArn
+  ChildStepFunction1Arn:
+    Description: ARN of Child Step Function 1
+    Value:
+      Ref: ChildStepFunction1
+  ChildStepFunction2Arn:
+    Description: ARN of Child Step Function 2
+    Value:
+      Ref: ChildStepFunction2
+  ChildStepFunction3Arn:
+    Description: ARN of Child Step Function 3
+    Value:
+      Ref: ChildStepFunction3
+  ChildStepFunction4Arn:
+    Description: ARN of Child Step Function 4
+    Value:
+      Ref: ChildStepFunction4
+  ChildStepFunction5Arn:
+    Description: ARN of Child Step Function 5
+    Value:
+      Ref: ChildStepFunction5
+  UsageInstructions:
+    Description: How to customize Glue jobs per child
+    Value: "To adjust Glue jobs, pass comma-separated job names as parameters:\nsam\
+      \ deploy --parameter-overrides Child1GlueJobs=\"job-a,job-b\" Child2GlueJobs=\"\
+      job-x,job-y,job-z\"\n"
