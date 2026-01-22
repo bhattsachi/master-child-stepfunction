@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Single Step Function that executes Glue jobs passed as input.
+  Can be executed multiple times in parallel with different job lists.
+  Pure CloudFormation template - no SAM dependencies.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+  AlarmSNSTopicArn:
+    Type: String
+    Description: SNS Topic ARN for CloudWatch Alarm notifications
+    Default: ''
+
+Conditions:
+  HasSNSTopic: !Not [!Equals [!Ref AlarmSNSTopicArn, '']]
+
+Resources:
+  #============================================================================
+  # IAM Role
+  #============================================================================
+
+  GlueJobExecutorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-sfn-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GlueJobExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                  - glue:BatchStopJobRun
+                Resource: '*'
+        - PolicyName: CloudWatchAlarmActions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:SetAlarmState
+                Resource:
+                  - !Sub 'arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-sfn-failure'
+
+  #============================================================================
+  # CloudWatch Alarm
+  #============================================================================
+
+  StepFunctionFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-sfn-failure'
+      AlarmDescription: Alarm triggered when Step Function execution fails
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref GlueJobExecutorStateMachine
+      AlarmActions:
+        - !If [HasSNSTopic, !Ref AlarmSNSTopicArn, !Ref 'AWS::NoValue']
+      TreatMissingData: notBreaching
+
+  #============================================================================
+  # Single Step Function - Executes Glue jobs passed as input
+  # 
+  # Input format:
+  # {
+  #   "glueJobs": "job1,job2,job3",
+  #   "executionName": "OptionalName"
+  # }
+  #============================================================================
+
+  GlueJobExecutorStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${AWS::StackName}-glue-executor'
+      RoleArn: !GetAtt GlueJobExecutorRole.Arn
+      StateMachineType: STANDARD
+      DefinitionString: !Sub |
+        {
+          "Comment": "Executes Glue jobs passed as input. Input: { \"glueJobs\": \"job1,job2,job3\" }",
+          "StartAt": "ValidateInput",
+          "States": {
+            "ValidateInput": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.glueJobs",
+                  "IsPresent": true,
+                  "Next": "SplitJobsList"
+                }
+              ],
+              "Default": "InputError"
+            },
+            "InputError": {
+              "Type": "Fail",
+              "Error": "InvalidInput",
+              "Cause": "Missing required field 'glueJobs'. Expected input: { \"glueJobs\": \"job1,job2,job3\" }"
+            },
+            "SplitJobsList": {
+              "Type": "Pass",
+              "Parameters": {
+                "jobs.$": "States.StringSplit($.glueJobs, ',')",
+                "originalInput.$": "$"
+              },
+              "Next": "ExecuteGlueJobsSequentially"
+            },
+            "ExecuteGlueJobsSequentially": {
+              "Type": "Map",
+              "ItemsPath": "$.jobs",
+              "MaxConcurrency": 1,
+              "ItemProcessor": {
+                "ProcessorConfig": {
+                  "Mode": "INLINE"
+                },
+                "StartAt": "RunGlueJob",
+                "States": {
+                  "RunGlueJob": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::glue:startJobRun.sync",
+                    "Parameters": {
+                      "JobName.$": "$"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "ResultPath": "$.glueJobResults",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "TriggerFailureAlarm"
+                }
+              ],
+              "Next": "ExecutionSuccess"
+            },
+            "TriggerFailureAlarm": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:cloudwatch:setAlarmState",
+              "Parameters": {
+                "AlarmName": "${AWS::StackName}-sfn-failure",
+                "StateValue": "ALARM",
+                "StateReason.$": "States.Format('Glue job execution failed. Jobs: {}', $.originalInput.glueJobs)"
+              },
+              "Next": "ExecutionFailed"
+            },
+            "ExecutionFailed": {
+              "Type": "Fail",
+              "Error": "GlueJobFailed",
+              "Cause": "One or more Glue jobs failed during execution"
+            },
+            "ExecutionSuccess": {
+              "Type": "Succeed"
+            }
+          }
+        }
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the Glue Job Executor Step Function
+    Value: !Ref GlueJobExecutorStateMachine
+    Export:
+      Name: !Sub '${AWS::StackName}-StateMachineArn'
+
+  StateMachineName:
+    Description: Name of the Step Function
+    Value: !Sub '${AWS::StackName}-glue-executor'
+
+  #============================================================================
+  # Example Commands
+  #============================================================================
+
+  ExecuteExample1:
+    Description: Execute with jobs 1-3
+    Value: !Sub |
+      aws stepfunctions start-execution --state-machine-arn arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-glue-executor --name "execution-a-$(date +%s)" --input '{"glueJobs":"job1,job2,job3"}'
+
+  ExecuteExample2:
+    Description: Execute with jobs 4-6
+    Value: !Sub |
+      aws stepfunctions start-execution --state-machine-arn arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-glue-executor --name "execution-b-$(date +%s)" --input '{"glueJobs":"job4,job5,job6"}'
+
+  ExecuteParallelExample:
+    Description: Execute multiple instances in parallel (bash script)
+    Value: !Sub |
+      # Run multiple executions in parallel
+      SFN_ARN="arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-glue-executor"
+      
+      aws stepfunctions start-execution --state-machine-arn $SFN_ARN --name "exec-a-$(date +%s)" --input '{"glueJobs":"job1,job2,job3"}' &
+      aws stepfunctions start-execution --state-machine-arn $SFN_ARN --name "exec-b-$(date +%s)" --input '{"glueJobs":"job4,job5,job6"}' &
+      aws stepfunctions start-execution --state-machine-arn $SFN_ARN --name "exec-c-$(date +%s)" --input '{"glueJobs":"job7,job8"}' &
+      wait

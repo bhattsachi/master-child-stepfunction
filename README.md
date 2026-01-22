@@ -262,13 +262,23 @@ aws cloudformation wait stack-delete-complete \
 5. **SAM Transform**: The template uses `Transform: AWS::Serverless-2016-10-31`, which requires packaging (Option 1) or CloudFormation's macro support.
 # ===========================================================
 
+Use ONE Step Function definition
+Start MULTIPLE executions at the same time
+Each execution receives different Glue job names as input
+Each execution runs only the Glue jobs passed to it
 
 ✅ Yes, you can execute multiple instances of the same Step Function at the same time
 ✅ Each execution can receive different Glue job names
 ✅ All executions run in parallel
 ✅ Glue jobs are started dynamically via input parameters
 
-# quick deploy
+# pure cloud formation 
+ aws cloudformation deploy \
+  --template-file master-mutlple-glue-jobs-template.yaml \
+  --stack-name master-step-glue-executor-stack \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# quick deploy SAM
 aws cloudformation package \
   --template-file sam-master-template.yaml \
   --s3-bucket hoth-data-application-artifacts-615299756109-us-east-2 \
@@ -280,3 +290,6 @@ aws cloudformation deploy \
   --template-file packaged-template.yaml \
   --stack-name master-step-function-multiple-gluejobs-stack \
   --capabilities CAPABILITY_NAMED_IAM
+
+
+ 
