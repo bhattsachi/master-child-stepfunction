@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Step Function to execute Glue jobs dynamically using input parameters
+
+Globals:
+  Function:
+    Timeout: 900
+
+Resources:
+
+  StepFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: glue-stepfn-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionGluePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                  - glue:BatchStopJobRun
+                Resource: "*"
+
+  GlueOrchestratorStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: glue-orchestrator
+      Role: !GetAtt StepFunctionExecutionRole.Arn
+      Type: STANDARD
+      Definition:
+        StartAt: RunGlueJobs
+        States:
+          RunGlueJobs:
+            Type: Map
+            ItemsPath: $.glueJobs
+            MaxConcurrency: 5
+            Iterator:
+              StartAt: StartGlueJob
+              States:
+                StartGlueJob:
+                  Type: Task
+                  Resource: arn:aws:states:::glue:startJobRun.sync
+                  Parameters:
+                    JobName.$: $
+                  Retry:
+                    - ErrorEquals:
+                        - Glue.ConcurrentRunsExceededException
+                        - Glue.InternalServiceException
+                      IntervalSeconds: 30
+                      MaxAttempts: 3
+                      BackoffRate: 2
+                  Catch:
+                    - ErrorEquals:
+                        - States.ALL
+                      ResultPath: $.error
+                      Next: GlueJobFailed
+                  End: true
+            End: true
+
+          GlueJobFailed:
+            Type: Fail
+            Cause: Glue job execution failed
+
+Outputs:
+  StepFunctionArn:
+    Description: ARN of Glue Orchestrator Step Function
+    Value: !Ref GlueOrchestratorStateMachine

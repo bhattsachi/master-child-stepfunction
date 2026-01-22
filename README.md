@@ -90,18 +90,8 @@ sam deploy --parameter-overrides \
 This transforms SAM-specific resources and uploads artifacts to S3.
 
 ```bash
-aws cloudformation package \
-  --template-file sam-template.yaml \
-  --s3-bucket hoth-data-application-artifacts-615299756109-us-east-2 \
-  --s3-prefix sam-artifacts \
-  --output-template-file packaged-template.yaml
-```
-# quick deploy 
-aws cloudformation deploy \
-  --template-file packaged-template.yaml \
-  --stack-name master-step-function-stack \
-  --capabilities CAPABILITY_NAMED_IAM
 
+# quick deploy 
   aws cloudformation deploy \
   --template-file cloudformation/template.yaml \
   --stack-name master-step-function-stack \
@@ -270,3 +260,23 @@ aws cloudformation wait stack-delete-complete \
 4. **Profile**: Add `--profile <profile-name>` if using named AWS profiles.
 
 5. **SAM Transform**: The template uses `Transform: AWS::Serverless-2016-10-31`, which requires packaging (Option 1) or CloudFormation's macro support.
+# ===========================================================
+
+
+✅ Yes, you can execute multiple instances of the same Step Function at the same time
+✅ Each execution can receive different Glue job names
+✅ All executions run in parallel
+✅ Glue jobs are started dynamically via input parameters
+
+# quick deploy
+aws cloudformation package \
+  --template-file sam-master-template.yaml \
+  --s3-bucket hoth-data-application-artifacts-615299756109-us-east-2 \
+  --s3-prefix sam-artifacts \
+  --output-template-file packaged-template.yaml
+```
+
+aws cloudformation deploy \
+  --template-file packaged-template.yaml \
+  --stack-name master-step-function-multiple-gluejobs-stack \
+  --capabilities CAPABILITY_NAMED_IAM
