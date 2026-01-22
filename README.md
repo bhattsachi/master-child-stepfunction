@@ -74,4 +74,189 @@ sam deploy --parameter-overrides \
   Child3GlueJobs="load-job-1" \
   Child4GlueJobs="process-x,process-y,process-z" \
   Child5GlueJobs="final-job"
-  
+  ### ===================================================================
+
+  # AWS CLI Commands to Deploy SAM Template using CloudFormation
+
+## Prerequisites
+- AWS CLI installed and configured
+- Appropriate IAM permissions for CloudFormation, Step Functions, IAM, CloudWatch, and Glue
+
+---
+
+## Option 1: Using `aws cloudformation package` and `deploy` (Recommended for SAM templates)
+
+### Step 1: Package the template
+This transforms SAM-specific resources and uploads artifacts to S3.
+
+```bash
+aws cloudformation package \
+  --template-file template.yaml \
+  --s3-bucket <YOUR_S3_BUCKET_NAME> \
+  --s3-prefix sam-artifacts \
+  --output-template-file packaged-template.yaml
+```
+
+### Step 2: Deploy the packaged template
+
+```bash
+aws cloudformation deploy \
+  --template-file packaged-template.yaml \
+  --stack-name master-step-function-stack \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides \
+    Environment=dev \
+    AlarmSNSTopicArn="" \
+    Child1GlueJobs="glue-job-1-a,glue-job-1-b,glue-job-1-c" \
+    Child2GlueJobs="glue-job-2-a,glue-job-2-b,glue-job-2-c,glue-job-2-d" \
+    Child3GlueJobs="glue-job-3-a,glue-job-3-b,glue-job-3-c,glue-job-3-d,glue-job-3-e" \
+    Child4GlueJobs="glue-job-4-a,glue-job-4-b" \
+    Child5GlueJobs="glue-job-5-a,glue-job-5-b,glue-job-5-c,glue-job-5-d,glue-job-5-e,glue-job-5-f"
+```
+
+---
+
+## Option 2: Using `aws cloudformation create-stack` (Direct deployment)
+
+### For new stack creation:
+
+```bash
+aws cloudformation create-stack \
+  --stack-name master-step-function-stack \
+  --template-body file://template.yaml \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameters \
+    ParameterKey=Environment,ParameterValue=dev \
+    ParameterKey=AlarmSNSTopicArn,ParameterValue="" \
+    ParameterKey=Child1GlueJobs,ParameterValue="glue-job-1-a,glue-job-1-b,glue-job-1-c" \
+    ParameterKey=Child2GlueJobs,ParameterValue="glue-job-2-a,glue-job-2-b,glue-job-2-c,glue-job-2-d" \
+    ParameterKey=Child3GlueJobs,ParameterValue="glue-job-3-a,glue-job-3-b,glue-job-3-c,glue-job-3-d,glue-job-3-e" \
+    ParameterKey=Child4GlueJobs,ParameterValue="glue-job-4-a,glue-job-4-b" \
+    ParameterKey=Child5GlueJobs,ParameterValue="glue-job-5-a,glue-job-5-b,glue-job-5-c,glue-job-5-d,glue-job-5-e,glue-job-5-f"
+```
+
+### For updating an existing stack:
+
+```bash
+aws cloudformation update-stack \
+  --stack-name master-step-function-stack \
+  --template-body file://template.yaml \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameters \
+    ParameterKey=Environment,ParameterValue=dev \
+    ParameterKey=AlarmSNSTopicArn,ParameterValue="" \
+    ParameterKey=Child1GlueJobs,ParameterValue="glue-job-1-a,glue-job-1-b,glue-job-1-c" \
+    ParameterKey=Child2GlueJobs,ParameterValue="glue-job-2-a,glue-job-2-b,glue-job-2-c,glue-job-2-d" \
+    ParameterKey=Child3GlueJobs,ParameterValue="glue-job-3-a,glue-job-3-b,glue-job-3-c,glue-job-3-d,glue-job-3-e" \
+    ParameterKey=Child4GlueJobs,ParameterValue="glue-job-4-a,glue-job-4-b" \
+    ParameterKey=Child5GlueJobs,ParameterValue="glue-job-5-a,glue-job-5-b,glue-job-5-c,glue-job-5-d,glue-job-5-e,glue-job-5-f"
+```
+
+---
+
+## Option 3: Create Change Set (For reviewing changes before deployment)
+
+### Step 1: Create the change set
+
+```bash
+aws cloudformation create-change-set \
+  --stack-name master-step-function-stack \
+  --change-set-name my-change-set \
+  --template-body file://template.yaml \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --change-set-type CREATE \
+  --parameters \
+    ParameterKey=Environment,ParameterValue=dev \
+    ParameterKey=AlarmSNSTopicArn,ParameterValue="" \
+    ParameterKey=Child1GlueJobs,ParameterValue="glue-job-1-a,glue-job-1-b,glue-job-1-c" \
+    ParameterKey=Child2GlueJobs,ParameterValue="glue-job-2-a,glue-job-2-b,glue-job-2-c,glue-job-2-d" \
+    ParameterKey=Child3GlueJobs,ParameterValue="glue-job-3-a,glue-job-3-b,glue-job-3-c,glue-job-3-d,glue-job-3-e" \
+    ParameterKey=Child4GlueJobs,ParameterValue="glue-job-4-a,glue-job-4-b" \
+    ParameterKey=Child5GlueJobs,ParameterValue="glue-job-5-a,glue-job-5-b,glue-job-5-c,glue-job-5-d,glue-job-5-e,glue-job-5-f"
+```
+
+### Step 2: Review the change set
+
+```bash
+aws cloudformation describe-change-set \
+  --stack-name master-step-function-stack \
+  --change-set-name my-change-set
+```
+
+### Step 3: Execute the change set
+
+```bash
+aws cloudformation execute-change-set \
+  --stack-name master-step-function-stack \
+  --change-set-name my-change-set
+```
+
+---
+
+## Useful Monitoring Commands
+
+### Check stack status:
+```bash
+aws cloudformation describe-stacks \
+  --stack-name master-step-function-stack \
+  --query 'Stacks[0].StackStatus'
+```
+
+### Watch stack events (useful during deployment):
+```bash
+aws cloudformation describe-stack-events \
+  --stack-name master-step-function-stack \
+  --query 'StackEvents[*].[Timestamp,ResourceStatus,ResourceType,LogicalResourceId,ResourceStatusReason]' \
+  --output table
+```
+
+### Wait for stack creation to complete:
+```bash
+aws cloudformation wait stack-create-complete \
+  --stack-name master-step-function-stack
+```
+
+### Wait for stack update to complete:
+```bash
+aws cloudformation wait stack-update-complete \
+  --stack-name master-step-function-stack
+```
+
+### Get stack outputs:
+```bash
+aws cloudformation describe-stacks \
+  --stack-name master-step-function-stack \
+  --query 'Stacks[0].Outputs'
+```
+
+---
+
+## Delete Stack
+
+```bash
+aws cloudformation delete-stack \
+  --stack-name master-step-function-stack
+```
+
+### Wait for deletion to complete:
+```bash
+aws cloudformation wait stack-delete-complete \
+  --stack-name master-step-function-stack
+```
+
+---
+
+## Notes
+
+1. **CAPABILITY_NAMED_IAM**: Required because the template creates IAM roles with custom names.
+
+2. **S3 Bucket**: For Option 1, you need an S3 bucket to store packaged artifacts. Create one if needed:
+   ```bash
+   aws s3 mb s3://my-cfn-artifacts-bucket --region us-east-1
+   ```
+
+3. **Region**: Add `--region <region>` to commands if not using default region.
+
+4. **Profile**: Add `--profile <profile-name>` if using named AWS profiles.
+
+5. **SAM Transform**: The template uses `Transform: AWS::Serverless-2016-10-31`, which requires packaging (Option 1) or CloudFormation's macro support.
