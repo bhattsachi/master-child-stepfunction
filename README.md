@@ -102,6 +102,11 @@ aws cloudformation deploy \
   --stack-name master-step-function-stack \
   --capabilities CAPABILITY_NAMED_IAM
 
+  aws cloudformation deploy \
+  --template-file cloudformation/template.yaml \
+  --stack-name master-step-function-stack \
+  --capabilities CAPABILITY_NAMED_IAM
+
 ### Step 2: Deploy the packaged template
 
 ```bash
