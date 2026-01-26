@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Single Step Function that executes Glue jobs passed as input.
-  Can be executed multiple times in parallel with different job lists.
+  Single Step Function that executes ALL Glue jobs passed as input,
+  continuing even if some jobs fail. Collects results and reports at the end.
   Pure CloudFormation template - no SAM dependencies.
 
 Parameters:
@@ -84,13 +84,18 @@ Resources:
       TreatMissingData: notBreaching
 
   #============================================================================
-  # Single Step Function - Executes Glue jobs passed as input
+  # Single Step Function - Executes ALL Glue jobs, continues on failure
   # 
   # Input format:
   # {
-  #   "glueJobs": "job1,job2,job3",
-  #   "executionName": "OptionalName"
+  #   "glueJobs": "job1,job2,job3"
   # }
+  #
+  # Behavior:
+  # - Executes all jobs sequentially
+  # - If a job fails, catches error and continues to next job
+  # - At the end, checks if any failures occurred
+  # - Reports success only if ALL jobs succeeded
   #============================================================================
 
   GlueJobExecutorStateMachine:
@@ -101,7 +106,7 @@ Resources:
       StateMachineType: STANDARD
       DefinitionString: !Sub |
         {
-          "Comment": "Executes Glue jobs passed as input. Input: { \"glueJobs\": \"job1,job2,job3\" }",
+          "Comment": "Executes ALL Glue jobs even if some fail. Input: { \"glueJobs\": \"job1,job2,job3\" }",
           "StartAt": "ValidateInput",
           "States": {
             "ValidateInput": {
@@ -126,9 +131,9 @@ Resources:
                 "jobs.$": "States.StringSplit($.glueJobs, ',')",
                 "originalInput.$": "$"
               },
-              "Next": "ExecuteGlueJobsSequentially"
+              "Next": "ExecuteAllGlueJobs"
             },
-            "ExecuteGlueJobsSequentially": {
+            "ExecuteAllGlueJobs": {
               "Type": "Map",
               "ItemsPath": "$.jobs",
               "MaxConcurrency": 1,
@@ -144,19 +149,58 @@ Resources:
                     "Parameters": {
                       "JobName.$": "$"
                     },
+                    "ResultPath": "$.jobResult",
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "ResultPath": "$.error",
+                        "Next": "MarkJobAsFailed"
+                      }
+                    ],
+                    "Next": "MarkJobAsSucceeded"
+                  },
+                  "MarkJobAsSucceeded": {
+                    "Type": "Pass",
+                    "Parameters": {
+                      "jobName.$": "$",
+                      "status": "SUCCEEDED",
+                      "error": null
+                    },
+                    "End": true
+                  },
+                  "MarkJobAsFailed": {
+                    "Type": "Pass",
+                    "Parameters": {
+                      "jobName.$": "$.jobName",
+                      "status": "FAILED",
+                      "error.$": "$.error"
+                    },
                     "End": true
                   }
                 }
               },
-              "ResultPath": "$.glueJobResults",
-              "Catch": [
+              "ResultPath": "$.jobResults",
+              "Next": "CheckForFailures"
+            },
+            "CheckForFailures": {
+              "Type": "Pass",
+              "Parameters": {
+                "jobResults.$": "$.jobResults",
+                "originalInput.$": "$.originalInput",
+                "failedJobs.$": "States.ArrayGetItem(States.StringSplit(States.JsonToString($.jobResults), 'FAILED'), 0)"
+              },
+              "Next": "EvaluateResults"
+            },
+            "EvaluateResults": {
+              "Type": "Choice",
+              "Choices": [
                 {
-                  "ErrorEquals": ["States.ALL"],
-                  "ResultPath": "$.error",
+                  "Variable": "$.failedJobs",
+                  "StringMatches": "*jobName*",
                   "Next": "TriggerFailureAlarm"
                 }
               ],
-              "Next": "ExecutionSuccess"
+              "Default": "AllJobsSucceeded"
             },
             "TriggerFailureAlarm": {
               "Type": "Task",
@@ -164,16 +208,17 @@ Resources:
               "Parameters": {
                 "AlarmName": "${AWS::StackName}-sfn-failure",
                 "StateValue": "ALARM",
-                "StateReason.$": "States.Format('Glue job execution failed. Jobs: {}', $.originalInput.glueJobs)"
+                "StateReason.$": "States.Format('One or more Glue jobs failed. Jobs: {}', $.originalInput.glueJobs)"
               },
-              "Next": "ExecutionFailed"
+              "ResultPath": "$.alarmResult",
+              "Next": "PartialFailure"
             },
-            "ExecutionFailed": {
+            "PartialFailure": {
               "Type": "Fail",
-              "Error": "GlueJobFailed",
-              "Cause": "One or more Glue jobs failed during execution"
+              "Error": "PartialGlueJobFailure",
+              "Cause": "One or more Glue jobs failed. All jobs were attempted. Check jobResults for details."
             },
-            "ExecutionSuccess": {
+            "AllJobsSucceeded": {
               "Type": "Succeed"
             }
           }
@@ -190,27 +235,7 @@ Outputs:
     Description: Name of the Step Function
     Value: !Sub '${AWS::StackName}-glue-executor'
 
-  #============================================================================
-  # Example Commands
-  #============================================================================
-
-  ExecuteExample1:
-    Description: Execute with jobs 1-3
+  ExecuteExample:
+    Description: Example execution command
     Value: !Sub |
-      aws stepfunctions start-execution --state-machine-arn arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-glue-executor --name "execution-a-$(date +%s)" --input '{"glueJobs":"job1,job2,job3"}'
-
-  ExecuteExample2:
-    Description: Execute with jobs 4-6
-    Value: !Sub |
-      aws stepfunctions start-execution --state-machine-arn arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-glue-executor --name "execution-b-$(date +%s)" --input '{"glueJobs":"job4,job5,job6"}'
-
-  ExecuteParallelExample:
-    Description: Execute multiple instances in parallel (bash script)
-    Value: !Sub |
-      # Run multiple executions in parallel
-      SFN_ARN="arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-glue-executor"
-      
-      aws stepfunctions start-execution --state-machine-arn $SFN_ARN --name "exec-a-$(date +%s)" --input '{"glueJobs":"job1,job2,job3"}' &
-      aws stepfunctions start-execution --state-machine-arn $SFN_ARN --name "exec-b-$(date +%s)" --input '{"glueJobs":"job4,job5,job6"}' &
-      aws stepfunctions start-execution --state-machine-arn $SFN_ARN --name "exec-c-$(date +%s)" --input '{"glueJobs":"job7,job8"}' &
-      wait
+      aws stepfunctions start-execution --state-machine-arn arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-glue-executor --name "exec-$(date +%s)" --input '{"glueJobs":"job1,job2,job3"}'

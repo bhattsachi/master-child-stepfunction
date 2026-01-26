@@ -321,3 +321,42 @@ Summary
 ComponentCountStep Function1IAM Role1CloudWatch Alarm1Total Resources3
 Each execution runs independently and processes only the Glue jobs passed to it.TemplateYAML DownloadClaude is AI and can make mistakes. Please double-check responses.
  
+ Input: { "glueJobs": "job1,job2,job3,job4" }
+
+┌─────────────────────────────────────────────────────────────────┐
+│                     Map State (Sequential)                      │
+│                                                                 │
+│  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐     │
+│  │  job1   │ →  │  job2   │ →  │  job3   │ →  │  job4   │     │
+│  │   ✅    │    │   ❌    │    │   ✅    │    │   ✅    │     │
+│  │SUCCESS  │    │ FAILED  │    │SUCCESS  │    │SUCCESS  │     │
+│  └─────────┘    └─────────┘    └─────────┘    └─────────┘     │
+│       │              │              │              │            │
+│       ▼              ▼              ▼              ▼            │
+│  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐     │
+│  │  Mark   │    │  Catch  │    │  Mark   │    │  Mark   │     │
+│  │SUCCESS  │    │  Error  │    │SUCCESS  │    │SUCCESS  │     │
+│  │         │    │ → Mark  │    │         │    │         │     │
+│  │         │    │ FAILED  │    │         │    │         │     │
+│  └─────────┘    └─────────┘    └─────────┘    └─────────┘     │
+│                                                                 │
+│  Result: [                                                      │
+│    { "jobName": "job1", "status": "SUCCEEDED" },               │
+│    { "jobName": "job2", "status": "FAILED", "error": {...} },  │
+│    { "jobName": "job3", "status": "SUCCEEDED" },               │
+│    { "jobName": "job4", "status": "SUCCEEDED" }                │
+│  ]                                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │ Check Failures   │
+                    │ Any FAILED jobs? │
+                    └──────────────────┘
+                        │         │
+                   Yes  │         │  No
+                        ▼         ▼
+              ┌──────────────┐  ┌──────────────┐
+              │Trigger Alarm │  │ All Jobs     │
+              │+ Fail State  │  │ Succeeded ✅ │
+              └──────────────┘  └──────────────┘
